@@ -1,0 +1,647 @@
+/***********************************************
+ *Target：LCD1602显示的一个带万年历的可调时钟
+ *Author：Hyper
+ *Date：  2016.8.22
+ **********************************************/
+#include<reg52.h>
+#define uchar unsigned char
+#define uint unsigned int
+#define MAX_year 2050		//万年历的最大最小年份
+#define MIN_year 1996
+uchar code table[]="2016-08-16  TUE";
+uchar code table1[]=" 16:59:50";
+uchar code week[]=" MON TUE WED THU FRI SAT SUN";
+sbit lcden=P3^4;
+sbit lcdrs=P3^5;
+sbit lcdrw=P3^6;
+sbit KEY_WEEK=P2^0;		//weekday++
+sbit KEY_SUB=P2^4;		//时间/日期 减减
+sbit KEY_DATE=P3^7; 	//进入调日期模式
+sbit KEY_N=P2^1;		//nian++
+sbit KEY_Y=P2^2;		//yue++
+sbit KEY_R=P2^3;		//ri++
+sbit KEY_CLOCK=P3^0;	//进入调时模式
+sbit KEY_S=P3^1;		//shi++	   
+sbit KEY_F=P3^2;		//fen++	   
+sbit KEY_M=P3^3;		//miao++   
+uchar shi=23,fen=59,miao=50;			 //时间的初始化
+uint nian=1996,yue=2,ri=29,weekday=1;	 //日期的初始化
+uchar KEY_clock_count,KEY_date_count;
+uchar count;	  
+void delay(uint z)
+{
+	uint x,y;
+	for(x=z;x>0;x--)
+		for(y=110;y>0;y--);
+}
+/**************写指令操作**************/
+/*输入：RS=L,RW=L,D0-D7指令码,E=高脉冲*/
+void write_com(uchar com)  
+{
+	lcdrs=0;
+	lcdrw=0;	
+	P0=com;		
+	delay(5);
+	lcden=1;
+	delay(5);
+	lcden=0;
+}
+/**************写数据操作**************/
+/*输入：RS=H,RW=L,D0-D7指令码,E=高脉冲*/
+void write_data(uchar date)	
+{
+	lcdrs=1;
+	lcdrw=0;
+	P0=date;
+	delay(5);
+	lcden=1;
+	delay(5);
+	lcden=0;
+}
+/**************LCD1602初始化**************/
+void lcd1602_init()
+{
+	uchar num;
+	lcden=0;
+	write_com(0x38);  //显示模式设置，0011 1000
+	write_com(0x0C);  // 1 1 +显示光标+光标闪烁
+	write_com(0x06);  //写一个光标右移一个且地址指针加一
+	write_com(0x01);  //清屏一次
+	write_com(0x80);
+	for(num=0;num<15;num++)
+	{
+		write_data(table[num]);
+		delay(2);
+	}
+	write_com(0x80+0x40+3);
+	for(num=0;num<10;num++)
+	{
+		write_data(table1[num]);
+		delay(2);
+	}	
+}
+/**************中断初始化**************/
+void intter_init()
+{
+	TMOD=0x01;
+	TH0=(65536-50000)/256;
+	TL0=(65536-50000)%256;
+	EA=1;
+	ET0=1;
+	TR0=1;
+}
+/*********在指定地址写入时分秒*********/
+void write_sfm(uchar add,uchar date)
+{
+	uchar Shi,Ge;
+	Shi=date/10;
+	Ge=date%10;
+	write_com(0x80+0x40+add);
+	write_data(0x30+Shi);
+	write_data(0x30+Ge);
+}
+/**********在指定地址写入星期**********/
+void write_weekday(uchar add,uchar date)
+{
+	uchar i;
+	write_com(0x80+add);
+	for(i=0;i<3;i++)
+	{
+		write_data(week[4*date-3+i]);
+	}
+}
+/*********在指定地址写入年月日*********/
+void write_nyr(uchar add,uint date)
+{
+	uint Qian,Bai,Shi,Ge;
+	if(date>1000)
+	{
+		Qian=date/1000;
+		Bai=date/100%10;
+		Shi=date/10%10;
+		Ge=date%10;
+		write_com(0x80+add);
+		write_data(0x30+Qian);
+		write_data(0x30+Bai);
+		write_data(0x30+Shi);
+		write_data(0x30+Ge);	
+	}
+	else
+	{
+		Shi=date/10;
+		Ge=date%10;
+		write_com(0x80+add);
+		write_data(0x30+Shi);
+		write_data(0x30+Ge);
+	}
+	
+}
+/*************判断闰年*************/
+uchar is_runnian(uchar x)
+{
+	if((x%4==0&&x%100!=0)||x%400==0)
+		return 1;
+	else
+		return 0;
+}
+/*********键盘扫描调整日期*********/
+void key_scan_date()
+{
+	if(KEY_date_count==0)
+	{
+		if(KEY_DATE==0)
+		{
+			delay(5);
+			if(KEY_DATE==0)
+			{				
+				while(!KEY_DATE);
+				TR0=0;
+				if(KEY_date_count==0)
+				{
+					KEY_date_count++;
+					write_com(0x80+14);
+					write_com(0x0F);
+				}
+			}
+		}
+	}
+	if(KEY_date_count==1)
+	{
+		if(KEY_DATE==0)
+		{
+			delay(5);
+			if(KEY_DATE==0)
+			{				
+				while(!KEY_DATE);
+				if(KEY_date_count==1)
+				{
+					KEY_date_count++;
+					write_com(0x80+9);
+					write_com(0x0F);
+				}
+			}
+		}
+		if(KEY_WEEK==0)
+		{
+			delay(5);
+			if(KEY_WEEK==0)
+			{
+				while(!KEY_WEEK);
+				weekday++;
+				if(weekday==8)
+					weekday=1;
+				write_weekday(12,weekday);
+				write_com(0x80+14);
+				write_com(0x0F);
+			}
+		}
+		if(KEY_SUB==0)
+		{
+			delay(5);
+			if(KEY_SUB==0)
+			{
+				while(!KEY_SUB);
+				weekday--;
+				if(weekday==0)
+					weekday=7;
+				write_weekday(12,weekday);
+				write_com(0x80+14);
+				write_com(0x0F);
+			}
+		}
+	}
+	if(KEY_date_count==2)
+	{
+		if(KEY_DATE==0)
+		{
+			delay(5);
+			if(KEY_DATE==0)
+			{				
+				while(!KEY_DATE);
+				if(KEY_date_count==2)
+				{
+					KEY_date_count++;
+					write_com(0x80+6);
+					write_com(0x0F);
+				}
+			}
+		}
+		if(KEY_R==0)
+		{
+			delay(5);
+			if(KEY_R==0)
+			{
+				while(!KEY_R);
+				ri++;
+				if(yue==1||yue==3||yue==5||yue==7||yue==8||yue==10||yue==12)
+				{
+					if(ri==32)
+						ri=1;
+				}
+				else if(yue==2)
+				{
+					if(is_runnian(nian)==1)
+					{
+						if(ri==30)
+							ri=1;
+					}
+					else
+					{
+						if(ri>=29)
+							ri=1;
+					}
+				}
+				else
+				{
+					if(ri==31)
+						ri=1;
+				}
+				write_nyr(8,ri);
+				write_com(0x80+9);
+				write_com(0x0F);
+			}
+		}
+		if(KEY_SUB==0)
+		{
+			delay(5);
+			if(KEY_SUB==0)
+			{
+				while(!KEY_SUB);
+				ri--;
+				if(yue==1||yue==3||yue==5||yue==7||yue==8||yue==10||yue==12)
+				{
+					if(ri==0)
+						ri=31;
+				}
+				else if(yue==2)
+				{
+					if(is_runnian(nian)==1)
+					{
+						if(ri==0)
+							ri=29;
+					}
+					else
+					{
+						if(ri==0)
+							ri=28;
+					}
+				}
+				else
+				{
+					if(ri==0)
+						ri=30;
+				}
+				write_nyr(8,ri);
+				write_com(0x80+9);
+				write_com(0x0F);
+			}
+		}	
+	} 
+	if(KEY_date_count==3)
+	{
+		if(KEY_DATE==0)
+		{
+			delay(5);
+			if(KEY_DATE==0)
+			{				
+				while(!KEY_DATE);
+				if(KEY_date_count==3)
+				{
+					KEY_date_count++;
+					write_com(0x80+3);
+					write_com(0x0F);
+				}
+			}
+		}
+		if(KEY_Y==0)
+		{
+			delay(5);
+			if(KEY_Y==0)
+			{
+				while(!KEY_Y);
+				yue++;
+				if(yue==13)
+					yue=1;
+				write_nyr(5,yue);
+				write_com(0x80+6);
+				write_com(0x0F);
+			}
+		}
+		if(KEY_SUB==0)
+		{
+			delay(5);
+			if(KEY_SUB==0)
+			{
+				while(!KEY_SUB);
+				yue--;
+				if(yue==0)
+					yue=12;
+				write_nyr(5,yue);
+				write_com(0x80+6);
+				write_com(0x0F);
+			}
+		}	
+	} 
+	if(KEY_date_count==4)
+	{
+		if(KEY_DATE==0)
+		{
+			delay(5);
+			if(KEY_DATE==0)
+			{				
+				while(!KEY_DATE);
+				KEY_date_count=0;
+				TR0=1;
+				write_com(0x80+3);
+				write_com(0x0C);
+			}
+		}
+		if(KEY_N==0)
+		{
+			delay(5);
+			if(KEY_N==0)
+			{
+				while(!KEY_N);
+				nian++;
+				if(nian==MAX_year)
+				{
+					nian=MIN_year;
+				}
+				write_nyr(0,nian);
+				write_com(0x80+3);
+				write_com(0x0F);
+			}
+		}
+		if(KEY_SUB==0)
+		{
+			delay(5);
+			if(KEY_SUB==0)
+			{
+				while(!KEY_SUB);
+				nian--;
+				if(nian==MIN_year)
+					nian=MAX_year;
+				write_nyr(0,nian);
+				write_com(0x80+3);
+				write_com(0x0F);
+			}
+		}	
+	}
+}
+
+/***********键盘扫描调整时间***********/
+void key_scan_clock()
+{
+	if(KEY_clock_count==0)
+	{
+		if(KEY_CLOCK==0)
+		{
+			delay(5);
+			if(KEY_CLOCK==0)
+			{				
+				while(!KEY_CLOCK);
+				TR0=0;
+				if(KEY_clock_count==0)
+				{
+					KEY_clock_count++;
+					write_com(0x80+0x40+11);
+					write_com(0x0F);
+				}
+			}
+		}
+	}
+	if(KEY_clock_count==1)
+	{
+		if(KEY_CLOCK==0)
+		{
+			delay(5);
+			if(KEY_CLOCK==0)
+			{				
+				while(!KEY_CLOCK);
+				if(KEY_clock_count==1)
+				{
+					KEY_clock_count++;
+					write_com(0x80+0x40+8);
+					write_com(0x0F);
+				}
+			}
+		}
+		if(KEY_M==0)
+		{
+			delay(5);
+			if(KEY_M==0)
+			{
+				while(!KEY_M);
+				miao++;
+				if(miao==60)
+					miao=0;
+				write_sfm(10,miao);
+				write_com(0x80+0x40+11);
+				write_com(0x0F);
+			}
+		}
+		if(KEY_SUB==0)
+		{
+			delay(5);
+			if(KEY_SUB==0)
+			{
+				while(!KEY_SUB);
+				miao--;
+				if(miao==255)
+					miao=59;
+				write_sfm(10,miao);
+				write_com(0x80+0x40+11);
+				write_com(0x0F);
+			}
+		}
+	}
+	if(KEY_clock_count==2)
+	{
+		if(KEY_CLOCK==0)
+		{
+			delay(5);
+			if(KEY_CLOCK==0)
+			{				
+				while(!KEY_CLOCK);
+				if(KEY_clock_count==2)
+				{
+					KEY_clock_count++;
+					write_com(0x80+0x40+5);
+					write_com(0x0F);
+				}
+			}
+		}
+		if(KEY_F==0)
+		{
+			delay(5);
+			if(KEY_F==0)
+			{
+				while(!KEY_F);
+				fen++;
+				if(fen==60)
+					fen=0;
+				write_sfm(7,fen);
+				write_com(0x80+0x40+8);
+				write_com(0x0F);
+			}
+		}
+		if(KEY_SUB==0)
+		{
+			delay(5);
+			if(KEY_SUB==0)
+			{
+				while(!KEY_SUB);
+				fen--;
+				if(fen==255)
+					fen=59;
+				write_sfm(7,fen);
+				write_com(0x80+0x40+8);
+				write_com(0x0F);
+			}
+		}
+	}
+	if(KEY_clock_count==3)
+	{
+		if(KEY_CLOCK==0)
+		{
+			delay(5);
+			if(KEY_CLOCK==0)
+			{	
+				while(!KEY_CLOCK);
+				if(KEY_clock_count==3)
+				{
+					KEY_clock_count=0;
+					TR0=1;
+					write_com(0x80+0x40+11);
+					write_com(0x0C);
+				}
+			}
+		}
+		if(KEY_S==0)
+		{
+			delay(5);
+			if(KEY_S==0)
+			{
+				while(!KEY_S);
+				shi++;
+				if(shi==24)
+					shi=0;
+				write_sfm(4,shi);
+				write_com(0x80+0x40+5);
+				write_com(0x0F);
+			}
+		}
+		if(KEY_SUB==0)
+		{
+			delay(5);
+			if(KEY_SUB==0)
+			{
+				while(!KEY_SUB);
+				shi--;
+				if(shi==255)
+					shi=23;
+				write_sfm(4,shi);
+				write_com(0x80+0x40+5);
+				write_com(0x0F);
+			}
+		}
+	}
+}
+void main()
+{
+	lcd1602_init();
+	intter_init();
+
+	while(1)
+	{
+		if(KEY_clock_count==0&&KEY_date_count==0)
+		{
+			key_scan_clock();
+			key_scan_date();
+		}
+		if(KEY_clock_count!=0)
+			key_scan_clock();
+		if(KEY_date_count!=0)
+			key_scan_date();
+	}
+}
+void TO_timer() interrupt 1
+{
+	TH0=(65536-50000)/256;//再次装定时器初值
+	TL0=(65536-50000)%256;
+	count++;
+	if(count==20)
+	{
+		count=0;
+		miao++;
+		if(miao==60)
+		{
+			miao=0;
+			fen++;
+			if(fen==60)
+			{
+				fen=0;
+				shi++;
+				if(shi==24)
+				{
+					shi=0;
+					ri++;
+					weekday++;
+					if(weekday==8)
+						weekday=1;
+					if(yue==1||yue==3||yue==5||yue==7||yue==8||yue==10||yue==12)
+					{
+						if(ri==32)
+						{
+							ri=1;
+							yue++;
+							if(yue==13)
+							{
+								yue=1;
+								nian++;
+								if(nian==MAX_year)
+								{
+									nian=MIN_year;
+								}
+							}
+						}
+					}
+					else if(yue==2)
+					{
+						if(is_runnian(nian)==1)
+						{
+							if(ri==30)
+							{
+								ri=1;
+								yue++;
+							}	
+						}
+						else
+						{
+							if(ri>=29)
+							{
+								ri=1;
+								yue++;
+							}
+						}
+					}
+					else
+					{
+						if(ri==31)
+						{
+							ri=1;
+							yue++;
+						}
+					}
+				}
+			}
+		}
+		write_nyr(0,nian);
+		write_nyr(5,yue);
+		write_nyr(8,ri);
+		write_weekday(12,weekday);
+		write_sfm(4,shi);
+		write_sfm(7,fen);
+		write_sfm(10,miao);
+	}
+}
